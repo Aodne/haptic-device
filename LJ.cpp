@@ -1051,13 +1051,13 @@ void updateLabels() {
     // current atom force magnitude
     cVector3d force = spheres[currentIndex]->getForce();
     debugForceLabel->setText("Force magnitude current atom: " + cStr(force.length(), 5));
-    debugForceLabel->setLocalPos(1400, 80);
+    debugForceLabel->setLocalPos(width-300, 80);
     debugForceLabel->setShowEnabled(true);
 
     // current atom position
     cVector3d pos = spheres[currentIndex]->getLocalPos();
     debugPositionLabel->setText("Atom pos: (" + cStr(pos.x(), 3) + ", " + cStr(pos.y(), 3) + ", " + cStr(pos.z(), 3) + ")");
-    debugPositionLabel->setLocalPos(1400, 100);
+    debugPositionLabel->setLocalPos(width-300, 100);
     debugPositionLabel->setShowEnabled(true);
 
     // nearest neighbor distance
@@ -1069,7 +1069,7 @@ void updateLabels() {
       }
     }
     debugNearestNeighborLabel->setText("Nearest neighbor current atom: " + cStr(minDist / 0.02, 5) + " Ang");
-    debugNearestNeighborLabel->setLocalPos(1400, 120);
+    debugNearestNeighborLabel->setLocalPos(width-300, 120);
     debugNearestNeighborLabel->setShowEnabled(true);
 
     // max force across all atoms
@@ -1083,7 +1083,7 @@ void updateLabels() {
       }
     }
     debugMaxForceLabel->setText("Max force: " + cStr(maxForce, 5) + " (atom " + to_string(maxForceIndex) + ")");
-    debugMaxForceLabel->setLocalPos(1400, 140);
+    debugMaxForceLabel->setLocalPos(width-300, 140);
     debugMaxForceLabel->setShowEnabled(true);
 
     // atom index labels
