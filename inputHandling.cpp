@@ -204,6 +204,10 @@ void keyCallback(GLFWwindow *a_window, int a_key, int a_scancode, int a_action,
   else if((a_key == GLFW_KEY_LEFT_CONTROL || a_key == GLFW_KEY_RIGHT_CONTROL) &&
            a_action == GLFW_PRESS)
     toggleHelpPanel();
+  else if (a_key == GLFW_KEY_D) {
+    std::lock_guard<std::recursive_mutex> lock(sceneMutex);
+    showDebug = !showDebug;
+  }
 }
 
 void mouseMotionCallback(GLFWwindow *a_window, double a_posX, double a_posY) {
