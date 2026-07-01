@@ -376,7 +376,7 @@ namespace
         Py_DECREF(pathStr);
 
         // Load ASE and grab the Atoms class now so we don't repeat this on every frame.
-        aseModule = importModule("ase");
+        aseModule = importModule("calculator");
         atomsClass = getCallable(aseModule, "Atoms");
 
         PyObject *calcArgs = PyTuple_New(0);
