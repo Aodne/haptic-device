@@ -1,6 +1,7 @@
 #include "chai3d.h"
 #include "atom.h"
 #include <atomic>
+#include <string>
 #include <vector>
 #include <GLFW/glfw3.h>
 #include "potentials.h"
@@ -13,6 +14,7 @@
 //------------------------------------------------------------------------------
 enum MouseState { MOUSE_IDLE, MOUSE_SELECTION };
 enum LocalPotential { LENNARD_JONES, MORSE, ASE };
+enum class HapticMode { Position, Standby, Force };
 
 // map of atom stringnames by atomic number
 extern std::unordered_map<int, std::string> atomStringNames;
@@ -84,3 +86,34 @@ extern std::atomic<int> screenshotCounter;
 extern std::atomic<int> writeConCounter;
 
 extern std::recursive_mutex sceneMutex;
+
+// currently selected haptic control scheme, changeable at runtime by the IPC server
+extern std::atomic<HapticMode> hapticMode;
+
+// currently active potential energy surface
+extern LocalPotential energySurface;
+
+// most recently computed potential energy, published for status queries
+extern std::atomic<double> displayedPotentialEnergy;
+
+// simulation time step in seconds, used by both the haptics-thread loop and
+// the no-device keyboard fallback loop; changeable at runtime
+extern std::atomic<double> simulationTimeStep;
+
+// smallest and largest time step (seconds) accepted from launch/IPC input
+constexpr double MIN_SIMULATION_TIME_STEP = 0.0001;
+constexpr double MAX_SIMULATION_TIME_STEP = 0.005;
+
+// validates and applies a new simulation time step; returns false (leaving
+// the current value untouched) if the value is non-finite or out of
+// [MIN_SIMULATION_TIME_STEP, MAX_SIMULATION_TIME_STEP]
+bool setLiveTimeStep(double seconds);
+
+// advance to the next non-anchored atom / next preset camera angle
+void switchCurrentAtom();
+void switchCamera();
+
+// swap the live calculator between "lj" and "morse"; returns false (and leaves
+// the current calculator untouched) for any other request, since ASE
+// calculators need constructor arguments only available at launch time
+bool setLivePotential(const std::string &requested);

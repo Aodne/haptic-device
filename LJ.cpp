@@ -38,6 +38,7 @@
 #include "chai3d.h"
 #include "globals.h"
 #include "inputHandling.h"
+#include "ipcServer.h"
 #include "potentials.h"
 #include "utility.h"
 #include "boundaryConditions.h"
@@ -47,6 +48,7 @@
 #include <unistd.h>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iostream>
@@ -112,7 +114,6 @@ const double K_MAGNET = 500.0;
 const double HAPTIC_STIFFNESS = 1000.0;
 const double SIGMA = 1.0;
 const double EPSILON = 1.0;
-const double KEYBOARD_SIM_DT_MAX = 0.002;
 const double MAX_ATOM_SPEED = 1.0;
 const double MAX_ATOM_STEP = 0.01;
 
@@ -152,12 +153,6 @@ const cVector3d backPlaneP2 = cVector3d(1, 1, -BOUNDARY_LIMIT);
 const cVector3d backPlaneNorm =
     cComputeSurfaceNormal(backPlanePos, backPlaneP1, backPlaneP2);
 
-enum class HapticMode {
-  Position,
-  Standby,
-  Force
-};
-
 //------------------------------------------------------------------------------
 // DECLARED VARIABLES
 //------------------------------------------------------------------------------
@@ -182,7 +177,11 @@ cHapticDeviceHandler *handler;
 // a pointer to the current haptic device
 cGenericHapticDevicePtr hapticDevice;
 
-HapticMode hapticMode;
+std::atomic<HapticMode> hapticMode(HapticMode::Position);
+
+// simulation time step in seconds; overridable at launch via
+// HAPTIC_DEVICE_TIME_STEP and changeable live via the IPC "set timestep" command
+std::atomic<double> simulationTimeStep(0.001);
 
 // highest stiffness the current haptic device can render
 double hapticDeviceMaxStiffness;
@@ -460,24 +459,23 @@ int main(int argc, char *argv[]) {
   std::array<double, 9> aseCell = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   std::array<int, 3> asePbc = {0, 0, 0};
 
-  // PBC argument (argv[5]): when this flag is true the asePbc values are forced
-  // to all zeros. When it is false (or absent) the loaded asePbc values are kept.
-  bool pbcFlag = false;
+  // PBC argument (argv[5]): "on" forces periodic boundaries on in all three
+  // directions, "off" forces them off, and "keep" (or omitting the argument)
+  // leaves whatever the loaded structure file specified untouched.
+  string pbcMode = "keep";
   if (argc > 5) {
-    string pbcArg = argv[5];
-    for (char &c : pbcArg) {
+    pbcMode = argv[5];
+    for (char &c : pbcMode) {
       c = tolower(c);
     }
-    pbcFlag = (pbcArg == "true" || pbcArg == "1" || pbcArg == "t" ||
-               pbcArg == "yes" || pbcArg == "on");
   }
 
   // PLACE ATOMS
   placeAtoms(aseCell, asePbc, argc, argv);
 
-  // If the PBC flag is true, force the asePbc values to all zeros regardless of
-  // what any loaded structure file specified.
-  if (pbcFlag) {
+  if (pbcMode == "on" || pbcMode == "true" || pbcMode == "1" || pbcMode == "yes") {
+    asePbc = {1, 1, 1};
+  } else if (pbcMode == "off" || pbcMode == "false" || pbcMode == "0" || pbcMode == "no") {
     asePbc = {0, 0, 0};
   }
 
@@ -493,7 +491,23 @@ int main(int argc, char *argv[]) {
   initializeLabels();
   initializePotentialEnergyPlot();
   initializeHelpPanel();
-  
+
+  // initial time step override, e.g. from the desktop launcher UI
+  if (const char *timeStepEnv = std::getenv("HAPTIC_DEVICE_TIME_STEP")) {
+    setLiveTimeStep(atof(timeStepEnv));
+  }
+
+  // IPC SERVER - lets the desktop launcher UI query status and change
+  // parameters (freeze, haptic mode, potential, anchors, time step) while running
+  int ipcPort = 8765;
+  if (const char *portEnv = std::getenv("HAPTIC_DEVICE_CMD_PORT")) {
+    ipcPort = atoi(portEnv);
+    if (ipcPort <= 0) {
+      ipcPort = 8765;
+    }
+  }
+  startIpcServer(ipcPort);
+
   // START SIMULATION
   initializeHapticThread();
   
@@ -795,6 +809,44 @@ void initializeCalculator(int argc, char *argv[], std::array<double, 9> aseCell,
     }
 }
 
+bool setLivePotential(const std::string &requested) {
+  string potential = requested;
+  for (char &c : potential) {
+    c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  }
+
+  Calculator *newCalculator = nullptr;
+  LocalPotential newSurface;
+  if (potential == "lj" || potential == "lennard-jones") {
+    newCalculator = new ljCalculator();
+    newSurface = LENNARD_JONES;
+  } else if (potential == "morse") {
+    newCalculator = new morseCalculator();
+    newSurface = MORSE;
+  } else {
+    // live switching to ASE is not supported since it needs constructor
+    // arguments (structure file, calculator spec) only available at launch
+    return false;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(sceneMutex);
+  delete calculatorPtr;
+  calculatorPtr = newCalculator;
+  energySurface = newSurface;
+  initializePotentialLabel();
+  return true;
+}
+
+bool setLiveTimeStep(double seconds) {
+  if (!std::isfinite(seconds) ||
+      seconds < MIN_SIMULATION_TIME_STEP ||
+      seconds > MAX_SIMULATION_TIME_STEP) {
+    return false;
+  }
+  simulationTimeStep.store(seconds);
+  return true;
+}
+
 void initializeLabels() {
   addLabel(hapticPositionLabel); // label to read haptic device
   addLabel(labelRates); // create a label to display the haptic and graphic rate of the simulation
@@ -943,7 +995,7 @@ void runGraphicsLoop() {
     glfwGetWindowSize(window, &width, &height); // get width and height of window
     if (!hapticDevice) {
       keyboardModeClock.stop();
-      double timeInterval = cMin(KEYBOARD_SIM_DT_MAX, keyboardModeClock.getCurrentTimeSeconds());
+      double timeInterval = cMin(simulationTimeStep.load(), keyboardModeClock.getCurrentTimeSeconds());
       keyboardModeClock.start(true);
       freqCounterHaptics.signal(1);
       initializeprevPositions();
@@ -960,6 +1012,7 @@ void close(void) { // stop the simulation
   static bool closed = false;
   if (!closed) {
     closed = true;
+    stopIpcServer();
     simulationRunning = false;
     if (hapticsThreadStarted.load()) {
       // wait for graphics and haptics loops to terminate
@@ -1060,6 +1113,7 @@ void updateGraphics(void) {
 
 
 void switchCamera() {
+  std::lock_guard<std::recursive_mutex> lock(sceneMutex);
   switch (curr_camera) {
     case 1:
       camera->setSphericalPolarRad(0);
@@ -1083,6 +1137,7 @@ void switchCamera() {
 }
 
 void switchCurrentAtom() {
+  std::lock_guard<std::recursive_mutex> lock(sceneMutex);
   Atom* current = spheres[currentIndex];
   int prev_curr_atom = currentIndex;
   currentIndex = remainder(currentIndex + 1, spheres.size());
@@ -1421,9 +1476,9 @@ void updateHaptics(void) {
     // std::this_thread::sleep_for(std::chrono::seconds(2));
 
     // time step the simulation runs at in seconds - shorter timesteps are more accurate, but result in slower frames
-    // .001 is good value for uma simulations
-    // .0001 is good value for all other
-    const double DT = .001;
+    // .001 is a good default for uma simulations; changeable at launch via
+    // HAPTIC_DEVICE_TIME_STEP and live via the IPC "set timestep" command
+    const double DT = simulationTimeStep.load();
     cVector3d force = stepSimulation(position, DT, true);
 
     /////////////////////////////////////////////////////////////////////////

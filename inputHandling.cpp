@@ -1,4 +1,5 @@
 #include "globals.h"
+#include "inputHandling.h"
 #include "utility.h"
 #include <GLFW/glfw3.h>
 #include <sys/stat.h>
@@ -40,13 +41,8 @@ void keyCallback(GLFWwindow *a_window, int a_key, int a_scancode, int a_action,
       glfwSwapInterval(swapInterval);
     }
   } else if (a_key == GLFW_KEY_U) {
-    std::lock_guard<std::recursive_mutex> lock(sceneMutex);
     // action - unanchor all key
-    for (auto i{0}; i < spheres.size(); i++) {
-      if (spheres[i]->isAnchor()) {
-        spheres[i]->setAnchor(false);
-      }
-    }
+    unanchorAllAtoms();
     assert(just_unanchored = 5);
     just_unanchored = 0;
   } else if (a_key == GLFW_KEY_S) {
@@ -99,13 +95,8 @@ void keyCallback(GLFWwindow *a_window, int a_key, int a_scancode, int a_action,
     writeToCon(dir2 + "atoms" + to_string(index) + ".con");
     cout << "LOGGED AT " + date + " atoms" + to_string(index) + ".con" << endl;
   } else if (a_key == GLFW_KEY_A) {
-    std::lock_guard<std::recursive_mutex> lock(sceneMutex);
     // anchor all atoms while maintaining control
-    for (auto i{0}; i < spheres.size(); i++) {
-      if (!spheres[i]->isAnchor() && !(spheres[i]->isCurrent())) {
-        spheres[i]->setAnchor(true);
-      }
-    }
+    anchorAllAtoms();
   } else if (a_key == GLFW_KEY_UP || a_key == GLFW_KEY_DOWN) {
         std::lock_guard<std::recursive_mutex> lock(sceneMutex);
         int direction = (a_key == GLFW_KEY_UP) ? 1 : -1;
@@ -247,4 +238,22 @@ void mouseButtonCallback(GLFWwindow *a_window, int a_button, int a_action,
     } else {
         mouseState = MOUSE_IDLE;
     }
+}
+
+void anchorAllAtoms() {
+  std::lock_guard<std::recursive_mutex> lock(sceneMutex);
+  for (auto i{0}; i < spheres.size(); i++) {
+    if (!spheres[i]->isAnchor() && !(spheres[i]->isCurrent())) {
+      spheres[i]->setAnchor(true);
+    }
+  }
+}
+
+void unanchorAllAtoms() {
+  std::lock_guard<std::recursive_mutex> lock(sceneMutex);
+  for (auto i{0}; i < spheres.size(); i++) {
+    if (spheres[i]->isAnchor()) {
+      spheres[i]->setAnchor(false);
+    }
+  }
 }
