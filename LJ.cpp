@@ -1310,62 +1310,35 @@ cVector3d forceModeUpdate(Atom *current, cVector3d position, const double timeIn
 }
 
 cVector3d advikTestModeUpdate(Atom *current, cVector3d position, const double timeInterval) {
-  constexpr double HAPTIC_PROXY_STIFFNESS = 55.0;
-  constexpr double HAPTIC_PROXY_DAMPING = 1.5;
-  constexpr double HAPTIC_FORCE_SCALE = 0.08;
-  constexpr double MAX_PROXY_COUPLING_FORCE = 1.0;
-  constexpr double MAX_HAPTIC_FORCE = 1.2;
-  constexpr double HAPTIC_FORCE_SMOOTHING = 0.80;
-  constexpr double HAPTIC_POSITION_DEADBAND = 0.001;
-  constexpr double MAX_HAPTIC_PROXY_SPEED = 0.35;
+  constexpr double ADVIK_ATOM_FORCE_SCALE = 0.08;
+  constexpr double ADVIK_MAX_DEVICE_FORCE = 1.6;
 
-  static bool prevForceModeHapticInitialized = false;
-  static cVector3d prevForceModeHapticPosition(0, 0, 0);
-  static cVector3d prevRenderedForce(0, 0, 0);
+  // spring constant haptic device feels
+  const double K_HAPTIC = K_HAPTIC_SPRING;
+  // spring constant atom feels
+  const double K_CURRENT = K_HAPTIC_SPRING;
+  // damping coefficients
+  const double K_HAPTIC_DAMP = K_HAPTIC_DAMPER;
+  const double K_CURRENT_DAMP = K_HAPTIC_DAMPER;
 
-  const double safeTimeInterval = (timeInterval > 1e-6) ? timeInterval : 1e-6;
-  const cVector3d atomPosition = current->getLocalPos();
-  const cVector3d atomPrevPosition = prevPositions[currentIndex];
-  const cVector3d atomVelocity = (atomPosition - atomPrevPosition) / safeTimeInterval;
+  cVector3d positionErr = position - current->getLocalPos();
+  cVector3d currentPrevPos = prevPositions[currentIndex];
+  cVector3d velocity = (current->getLocalPos() - currentPrevPos) / timeInterval;
+  cVector3d atomForce = current->getForce();
 
-  cVector3d hapticVelocity(0, 0, 0);
-  if (prevForceModeHapticInitialized) {
-    hapticVelocity = (position - prevForceModeHapticPosition) / safeTimeInterval;
-  } else {
-    prevForceModeHapticInitialized = true;
-  }
-  prevForceModeHapticPosition = position;
+  // Spring force + damping force on atom
+  cVector3d hapticForce = positionErr * K_CURRENT - velocity * K_CURRENT_DAMP;
+  current->setForce(current->getForce() + hapticForce);
 
-  const cVector3d molecularForce = current->getForce();
-  cVector3d positionError = position - atomPosition;
-  if (positionError.length() < HAPTIC_POSITION_DEADBAND) {
-    positionError.zero();
-  }
+  current->setLocalPos(getNewAtomPosition(current, currentPrevPos, timeInterval));
+  prevPositions[currentIndex] = current->getLocalPos();
 
-  cVector3d velocityError = hapticVelocity - atomVelocity;
-  velocityError = clampVectorMagnitude(velocityError, MAX_HAPTIC_PROXY_SPEED);
-
-  const cVector3d rawCouplingForce =
-      positionError * HAPTIC_PROXY_STIFFNESS + velocityError * HAPTIC_PROXY_DAMPING;
-  const cVector3d couplingForce =
-      clampVectorMagnitude(rawCouplingForce, MAX_PROXY_COUPLING_FORCE);
-
-  const cVector3d totalAtomForce = molecularForce + couplingForce;
-  current->setForce(totalAtomForce);
-
-  cVector3d newPosition = getNewAtomPosition(current, prevPositions[currentIndex], safeTimeInterval);
-  applyBoundaryConditions(newPosition);
-  prevPositions[currentIndex] = atomPosition;
-  current->setLocalPos(newPosition);
-  current->setVelocity((newPosition - atomPosition) / safeTimeInterval);
-
-  const cVector3d renderedForce = molecularForce * HAPTIC_FORCE_SCALE - couplingForce;
-  const cVector3d clampedForce = clampVectorMagnitude(renderedForce, MAX_HAPTIC_FORCE);
-  const cVector3d smoothedForce =
-      prevRenderedForce * HAPTIC_FORCE_SMOOTHING +
-      clampedForce * (1.0 - HAPTIC_FORCE_SMOOTHING);
-  prevRenderedForce = smoothedForce;
-  return smoothedForce;
+  // Spring force + damping force returned to haptic device
+  cVector3d forceErr = current->getLocalPos() - position;
+  cVector3d hapticVelocity = (current->getLocalPos() - currentPrevPos) / timeInterval;
+  cVector3d springFeedback = forceErr * K_HAPTIC - hapticVelocity * K_HAPTIC_DAMP;
+  cVector3d atomForceFeedback = atomForce * ADVIK_ATOM_FORCE_SCALE;
+  return clampVectorMagnitude(springFeedback + atomForceFeedback, ADVIK_MAX_DEVICE_FORCE);
 }
 
 bool prevHapticInitialized;
@@ -1741,7 +1714,7 @@ vector<string> sliderOrder = {"time_step"};
 // SLIDER UI STEP 1B: Add each new slider's configuration here.
 // sliderConfigs[id] = {display name, min, max, default, units, display scale, display digits}
 unordered_map<string, SliderConfig> sliderConfigs = {
-  {"time_step", {"Time Step", 0.0001, 0.0100, 0.0010, "ms", 1000.0, 2}}
+  {"time_step", {"Time Step", 0.0001, 0.0020, 0.0010, "ms", 1000.0, 2}}
 };
 
 void generateSliderUI() {
