@@ -99,3 +99,11 @@ extern std::vector<chai3d::cVector3d> initialPositions;
 
 // current atom index
 extern int currentIndex;
+
+// current measured temperature of the system
+extern std::atomic<double> displayedTemperature;
+
+// temperature label
+extern chai3d::cLabel *temperatureLabel;
+
+// barrier energy visualization label
