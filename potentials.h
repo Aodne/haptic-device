@@ -12,7 +12,8 @@ struct AseStructureData {
     std::vector<int> atomicNumbers;
     std::array<double, 9> cell = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     std::array<int, 3> pbc = {0, 0, 0};
-};
+    std::vector<double> radii;
+  };
 
 AseStructureData loadAseStructure(const std::string& filename,
                                   const std::array<int, 3>& repeat = {1, 1, 1});
@@ -25,6 +26,7 @@ class Calculator {
     // For good design, anything that is expected to change frequently should be included in the function call. In our case, that is only positions.
     // You could get a nasty unreported error by relying too much on these private parameters
     virtual std::vector<std::vector<double>> getFandU(std::vector<Atom*>& spheres) = 0;
+    virtual void setTemperature(double temperature) {}
 };
 
 ////// Calculator for the morse potential
@@ -70,11 +72,13 @@ class aseCalculator:public Calculator {
   std::string calculatorKwargs;
   std::array<double, 9> cell;
   std::array<int, 3> pbc;
+  double temperature = 0.0;
   public:
     explicit aseCalculator(const std::string& cName,
                            const std::array<double, 9>& cell,
                            const std::array<int, 3>& pbc);
     std::vector<std::vector<double>> getFandU(std::vector<Atom*>& spheres);
+    void setTemperature(double temperature) override;
 };
 
 #endif

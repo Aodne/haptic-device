@@ -28,8 +28,7 @@ $(TARGET): $(GLFW_LIB)
 #   make PYTHON_CONFIG=/usr/bin/python3.11-config
 PYTHON = $(TOP_DIR)/haptic-device/uma_env/bin/python
 
-# PYTHON_CONFIG ?= python3-config
-PYTHON_CONFIG=python3.11-config
+PYTHON_CONFIG ?= python3-config
 
 CXXFLAGS += $(shell $(PYTHON_CONFIG) --includes)
 LDLIBS   += $(shell $(PYTHON_CONFIG) --ldflags --embed)

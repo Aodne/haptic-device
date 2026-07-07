@@ -61,8 +61,37 @@ launcher or the IPC command server (see below).
 
 ### Windows
 
-Windows development temporarily halted (unable to compile on Visual Studio).
-Check WINDOWS.md for details on installation.
+Native Windows builds go through CMake rather than `make` (which needs
+WSL/Linux or macOS — see below). `WINDOWS.md` documents an old, abandoned
+Visual Studio project-file approach; ignore it.
+
+1. Install a Python 3 build from [python.org](https://www.python.org/downloads/)
+   (it bundles the dev headers/import library CMake's `find_package(Python3)`
+   needs — the Microsoft Store build does not).
+2. Download or clone a CHAI3D tree and build it first
+   ```
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+   cmake --build build --config Release
+   ```
+3. Clone this repo into the CHAI3D directory so it sits next to `src`,
+   `examples`, and `build`
+4. Create the directory `data` in `bin/resources` and move the file
+   `global_minima.txt` there
+5. Build `haptic-device` itself
+   ```
+   cd haptic-device
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+   cmake --build build --config Release
+   ```
+6. The binary will be written to `bin/win-x64/haptic-device.exe` (or
+   `bin/win-Win32` for a 32-bit build)
+
+Force Dimension/Novint Falcon (DHD) support isn't compiled in on Windows —
+upstream CHAI3D only links it on macOS/Linux/QNX — so a native Windows build
+always runs in keyboard/mouse-only mode. If you need the physical haptic
+device on a Windows box, build and run through WSL instead (uses the Linux
+instructions below); see `launcher/README.md`'s "Running under WSL" section
+for USB passthrough details.
 
 ### Linux
 1. Download or clone a CHAI3D tree and build it first
