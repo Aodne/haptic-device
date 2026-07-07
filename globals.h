@@ -141,6 +141,19 @@ bool setLiveKReturn(double value);
 bool setLiveKDampen(double value);
 bool setLiveReturnDelay(double value);
 
+// overall scale (0 = no feedback, 1 = full strength) applied to the force
+// sent to the physical haptic device, used by updateHaptics in LJ.cpp.
+// Overridable at launch via HAPTIC_DEVICE_FORCE_SCALE and changeable at
+// runtime via the IPC "set force_scale" command / launcher UI - lets owners
+// of older/more worn devices turn feedback down to reduce wear.
+extern std::atomic<double> hapticForceScale;
+
+constexpr double MIN_FORCE_SCALE = 0.0;
+constexpr double MAX_FORCE_SCALE = 1.0;
+
+// validated setter for hapticForceScale, same fail-closed contract as setLiveTimeStep
+bool setLiveForceScale(double value);
+
 // advance to the next non-anchored atom / next preset camera angle
 void switchCurrentAtom();
 void switchCamera();

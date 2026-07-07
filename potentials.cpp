@@ -732,6 +732,33 @@ namespace
         throw std::runtime_error(message.str());
     }
 
+    // ASE is only guaranteed to be installed in the bundled uma_env venv (see
+    // ensurePythonInitialized above), not on the system Python. Resolve that
+    // same interpreter here so this subprocess can actually import ase.
+    std::vector<std::string> getAsePythonCandidates() {
+        std::vector<std::string> candidates;
+        candidates.push_back("./haptic-device/uma_env/bin/python3");
+        candidates.push_back("../haptic-device/uma_env/bin/python3");
+        candidates.push_back("../../haptic-device/uma_env/bin/python3");
+        return candidates;
+    }
+
+    std::string resolveAsePythonExecutable()
+    {
+        for (const std::string &candidate : getAsePythonCandidates())
+        {
+            std::ifstream interpreter(candidate);
+            if (interpreter.good())
+            {
+                return candidate;
+            }
+        }
+
+        // Fall back to whatever python3 is on PATH so this still works in
+        // environments where ASE was installed system-wide instead.
+        return "python3";
+    }
+
 }
 
 // Loads an atom structure from a file (XYZ, CIF, etc.) by running ase_file_io.py
@@ -745,8 +772,9 @@ AseStructureData loadAseStructure(const std::string &filename)
 {
     AseStructureData structure;
     const std::string scriptPath = resolveAseFileIoScript();
+    const std::string pythonExecutable = resolveAsePythonExecutable();
     const std::string command =
-        "python3 " + quoteForShell(scriptPath) + " " + quoteForShell(filename);
+        quoteForShell(pythonExecutable) + " " + quoteForShell(scriptPath) + " " + quoteForShell(filename);
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
     if (!pipe) {
         throw std::runtime_error("Failed to start ASE structure loader helper.");

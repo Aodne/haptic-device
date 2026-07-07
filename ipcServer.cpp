@@ -95,7 +95,8 @@ string buildStatus() {
       << " settling_err=" << settlingError.load()
       << " k_return=" << kReturn.load()
       << " k_dampen=" << kDampen.load()
-      << " return_delay=" << returnDelaySeconds.load();
+      << " return_delay=" << returnDelaySeconds.load()
+      << " force_scale=" << hapticForceScale.load();
   return out.str();
 }
 
@@ -217,6 +218,18 @@ string handleCommand(const string &line) {
         }
       } catch (const exception &) {
         return "ERR return_delay must be a valid number";
+      }
+      return "OK";
+    } else if (key == "force_scale") {
+      try {
+        size_t consumed = 0;
+        double parsed = stod(value, &consumed);
+        if (consumed != value.size() || !setLiveForceScale(parsed)) {
+          return "ERR force_scale must be a number between " +
+                 to_string(MIN_FORCE_SCALE) + " and " + to_string(MAX_FORCE_SCALE);
+        }
+      } catch (const exception &) {
+        return "ERR force_scale must be a valid number";
       }
       return "OK";
     }

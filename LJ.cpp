@@ -141,6 +141,13 @@ const double K_RETURN_DAMPER = 2.0;    // Damping for standby return
 const double K_POSITION_ATTRACTION = 25.0;
 const double K_POSITION_DAMPER = 2.0;  // Damping for position mode
 
+// Hard safety ceiling on the force actually sent to the physical device, in
+// the same force units as MAX_FORCE/ATTRACTION_MAX below. Applied AFTER the
+// user-configurable hapticForceScale, so a runaway force spike (e.g. two
+// atoms overlapping) can't slam the device regardless of the chosen
+// feedback intensity - protects older/worn hardware from a hard jolt.
+const double MAX_HAPTIC_OUTPUT_FORCE = 1.6;
+
 // Scales the distance betweens atoms
 const double DIST_SCALE = .02;
 
@@ -219,6 +226,13 @@ std::atomic<double> settlingError(0.05);
 std::atomic<double> kReturn(25.0);
 std::atomic<double> kDampen(0.0); // 0 = no damping, matching original return behavior
 std::atomic<double> returnDelaySeconds(2.5);
+
+// overall scale applied to the force sent to the physical haptic device,
+// overridable at launch via HAPTIC_DEVICE_FORCE_SCALE and changeable live via
+// the IPC "set force_scale" command / launcher UI. Lets owners of older/more
+// worn devices turn down feedback strength to reduce wear, without touching
+// the underlying simulation's spring/damping constants.
+std::atomic<double> hapticForceScale(1.0);
 
 // sphere objects
 vector<Atom *> spheres;
@@ -375,6 +389,7 @@ void updateSliderWindowTitle();
 void sliderWindowSizeCallback(GLFWwindow *a_window, int a_width, int a_height);
 void sliderWindowCursorPosCallback(GLFWwindow *a_window, double a_posX, double a_posY);
 void sliderWindowMouseButtonCallback(GLFWwindow *a_window, int a_button, int a_action, int a_mods);
+void sliderWindowKeyCallback(GLFWwindow *a_window, int a_key, int a_scancode, int a_action, int a_mods);
 
 // callback when the framebuffer is resized (size in pixels, not window points)
 void framebufferSizeCallback(GLFWwindow *a_window, int a_width, int a_height);
@@ -491,7 +506,13 @@ static cVector3d clampVectorMagnitude(const cVector3d &value, const double maxMa
 // current camera
 int curr_camera = 1;
 
-int main(int argc, char *argv[]) {
+// on Windows, double-clicking the .exe directly (rather than launching it
+// through launcher/main.py, which supplies the required arguments) used to
+// crash instantly: the console window this project builds as opens, an
+// unhandled exception fires (e.g. missing haptic mode argument) and
+// std::terminate closes the window again before anyone can read why. main()
+// below catches that and keeps the window open with the error instead.
+int runApplication(int argc, char *argv[]) {
   printIntro();
   srand(time(NULL)); // initialize random seed
   
@@ -571,6 +592,13 @@ int main(int argc, char *argv[]) {
     setLiveTimeStep(atof(timeStepEnv));
   }
 
+  // initial haptic feedback intensity override, e.g. from the desktop
+  // launcher UI; lets owners of older/more worn devices start already turned
+  // down instead of having to dial it back after every launch
+  if (const char *forceScaleEnv = std::getenv("HAPTIC_DEVICE_FORCE_SCALE")) {
+    setLiveForceScale(atof(forceScaleEnv));
+  }
+
   // IPC SERVER - lets the desktop launcher UI query status and change
   // parameters (freeze, haptic mode, potential, anchors, time step) while running
   int ipcPort = 8765;
@@ -604,6 +632,19 @@ int main(int argc, char *argv[]) {
 
   glfwTerminate(); // terminate GLFW library
   return 0; // exit
+}
+
+int main(int argc, char *argv[]) {
+  try {
+    return runApplication(argc, argv);
+  } catch (const std::exception &e) {
+    cerr << endl << "Fatal error: " << e.what() << endl;
+    cerr << "(run this binary through launcher/main.py, or pass the haptic "
+            "mode argument yourself - see README.md)" << endl;
+    cerr << "Press Enter to close this window..." << endl;
+    cin.get();
+    return 1;
+  }
 }
 
 void framebufferSizeCallback(GLFWwindow *a_window, int a_width, int a_height) {
@@ -674,6 +715,7 @@ void initializeGLFW() {
   glfwSetCursorPosCallback(sliderWindow, sliderWindowCursorPosCallback);
   glfwSetMouseButtonCallback(sliderWindow, sliderWindowMouseButtonCallback);
   glfwSetWindowSizeCallback(sliderWindow, sliderWindowSizeCallback);
+  glfwSetKeyCallback(sliderWindow, sliderWindowKeyCallback);
   glfwMakeContextCurrent(window); // set current display context
   glfwSwapInterval(swapInterval); // sets the swap interval for the current display context
 }
@@ -1195,6 +1237,14 @@ bool setLiveReturnDelay(double value) {
   return true;
 }
 
+bool setLiveForceScale(double value) {
+  if (!std::isfinite(value) || value < MIN_FORCE_SCALE || value > MAX_FORCE_SCALE) {
+    return false;
+  }
+  hapticForceScale.store(value);
+  return true;
+}
+
 void initializeLabels() {
   addLabel(hapticPositionLabel); // label to read haptic device
   addLabel(labelRates); // create a label to display the haptic and graphic rate of the simulation
@@ -1484,11 +1534,13 @@ void updateLabels() {
   helpPanel->setLocalPos(width - 550, height - topMargin - helpPanelHeight);
   helpHeader->setLocalPos(width - 490, height - topMargin - headerReserve + 20);
 
+  double rowStartY = height - topMargin - headerReserve;
   for (int i = 0; i < hotkeyKeys.size(); i++) {
     cLabel *tempKeyLabel = hotkeyKeys[i];
     cLabel *tempFuncLabel = hotkeyFunctions[i];
-    tempKeyLabel->setLocalPos(width - 530, height - 105 - i * 35);
-    tempFuncLabel->setLocalPos(width - 350, height - 105 - i * 35);
+    double rowY = rowStartY - i * rowSpacing;
+    tempKeyLabel->setLocalPos(width - 530, rowY);
+    tempFuncLabel->setLocalPos(width - 350, rowY);
   }
 
   if (showDebug) {
@@ -2104,6 +2156,11 @@ void updateHaptics(void) {
     // APPLY FORCES
     /////////////////////////////////////////////////////////////////////////
 
+    // scale by the user-configurable feedback intensity, then apply a hard
+    // safety ceiling regardless of that scale - so a spike (e.g. two atoms
+    // overlapping) can never slam the device at full force even if
+    // intensity is set to 100%
+    force = clampVectorMagnitude(force * hapticForceScale.load(), MAX_HAPTIC_OUTPUT_FORCE);
     hapticDevice->setForce(force);
   }
   // close  connection to haptic device
@@ -2186,6 +2243,22 @@ unordered_map<string, SliderConfig> sliderConfigs = {
   {"time_step", {"Time Step", 0.0001, 0.0020, 0.0010, "ms", 1000.0, 2}}
 };
 
+// SLIDER UI STEP 4: Wire the slider back to whatever live state it controls,
+// both so dragging it takes effect immediately and so the handle reflects
+// changes made through another channel (e.g. the launcher's IPC command).
+void applySliderValue(const string &id, double value) {
+  if (id == "time_step") {
+    setLiveTimeStep(value);
+  }
+}
+
+double getLiveSliderValue(const string &id, double fallback) {
+  if (id == "time_step") {
+    return simulationTimeStep.load();
+  }
+  return fallback;
+}
+
 void generateSliderUI() {
   sliders.clear();
   sliderIndexById.clear();
@@ -2199,13 +2272,24 @@ void generateSliderUI() {
     slider.units = config.units;
     slider.minValue = config.minValue;
     slider.maxValue = config.maxValue;
-    slider.value = config.defaultValue;
+    slider.value = getLiveSliderValue(id, config.defaultValue);
     slider.displayScale = config.displayScale;
     slider.displayDigits = config.displayDigits;
     slider.dragging = false;
 
     sliderIndexById[id] = sliders.size();
     sliders.push_back(slider);
+  }
+}
+
+// keep sliders that aren't currently being dragged in sync with live state
+// changed through another channel (e.g. the launcher's IPC "set timestep")
+void syncSlidersFromLiveState() {
+  for (SliderUI &slider : sliders) {
+    if (slider.dragging) {
+      continue;
+    }
+    slider.value = getLiveSliderValue(slider.id, slider.value);
   }
 }
 
@@ -2298,6 +2382,29 @@ void drawRect(double x, double y, double w, double h, float r, float g, float b)
   glEnd();
 }
 
+void drawCircle(double cx, double cy, double radius, float r, float g, float b) {
+  const int segments = 24;
+  glColor3f(r, g, b);
+  glBegin(GL_TRIANGLE_FAN);
+  glVertex2d(cx, cy);
+  for (int i = 0; i <= segments; i++) {
+    const double angle = 2.0 * M_PI * i / segments;
+    glVertex2d(cx + radius * cos(angle), cy + radius * sin(angle));
+  }
+  glEnd();
+}
+
+// draws a horizontal "pill" (stadium shape): a rectangle capped with a
+// semicircle at each end, used for the simplified/rounded slider track
+void drawPill(double xStart, double xEnd, double y, double halfHeight, float r, float g, float b) {
+  if (xEnd < xStart) {
+    xEnd = xStart;
+  }
+  drawRect(xStart, y - halfHeight, xEnd - xStart, halfHeight * 2.0, r, g, b);
+  drawCircle(xStart, y, halfHeight, r, g, b);
+  drawCircle(xEnd, y, halfHeight, r, g, b);
+}
+
 void drawSliderText(const string &text, double x, double y) {
   if (!sliderFont) {
     return;
@@ -2337,6 +2444,8 @@ void renderSliderWindow() {
     return;
   }
 
+  syncSlidersFromLiveState();
+
   glfwMakeContextCurrent(sliderWindow);
   int framebufferWidth;
   int framebufferHeight;
@@ -2352,17 +2461,24 @@ void renderSliderWindow() {
   glClearColor(0.94f, 0.94f, 0.94f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
 
+  const double TRACK_HALF_HEIGHT = 3.0;
+  const double HANDLE_RADIUS = 9.0;
+
   for (int i = 0; i < sliders.size(); i++) {
     const SliderUI &slider = sliders[i];
     double trackX;
     double trackY;
     getSliderLayout(i, trackX, trackY);
+    const double trackXEnd = trackX + SLIDER_WIDTH;
     const double handleX = trackX + slider.normalizedValue() * SLIDER_WIDTH;
 
     drawSliderText(slider.displayText(), trackX, trackY - 28);
-    drawRect(trackX, trackY - 4, SLIDER_WIDTH, 8, 0.28f, 0.28f, 0.28f);
-    drawRect(trackX, trackY - 4, handleX - trackX, 8, 0.05f, 0.35f, 0.90f);
-    drawRect(handleX - 7, trackY - 15, 14, 30, 0.02f, 0.22f, 0.65f);
+    // simple rounded pill track with a filled portion, plus a plain circular
+    // handle knob - avoids the blocky rectangle look of the old slider
+    drawPill(trackX, trackXEnd, trackY, TRACK_HALF_HEIGHT, 0.82f, 0.82f, 0.84f);
+    drawPill(trackX, handleX, trackY, TRACK_HALF_HEIGHT, 0.20f, 0.55f, 0.95f);
+    drawCircle(handleX, trackY, HANDLE_RADIUS, 1.0f, 1.0f, 1.0f);
+    drawCircle(handleX, trackY, HANDLE_RADIUS - 2.5, 0.15f, 0.45f, 0.85f);
   }
 
   updateSliderWindowTitle();
@@ -2378,6 +2494,7 @@ bool handleSliderMousePress(double mouseX, double mouseY) {
 
     sliders[i].dragging = true;
     sliders[i].setNormalizedValue(getSliderNormalizedValueFromMouseX(i, mouseX));
+    applySliderValue(sliders[i].id, sliders[i].value);
     updateSliderWindowTitle();
     return true;
   }
@@ -2391,6 +2508,7 @@ bool handleSliderMouseMotion(double mouseX, double mouseY) {
     }
 
     sliders[i].setNormalizedValue(getSliderNormalizedValueFromMouseX(i, mouseX));
+    applySliderValue(sliders[i].id, sliders[i].value);
     updateSliderWindowTitle();
     return true;
   }
@@ -2432,5 +2550,17 @@ void sliderWindowMouseButtonCallback(GLFWwindow *a_window, int a_button, int a_a
     handleSliderMousePress(x, y);
   } else if (a_action == GLFW_RELEASE) {
     handleSliderMouseRelease();
+  }
+}
+
+// the Controls window has its own GLFW key callback, so ESC/Q only reached
+// the main window's keyCallback when the 3D view had focus; quitting should
+// work no matter which of the two windows the user last clicked into
+void sliderWindowKeyCallback(GLFWwindow *a_window, int a_key, int a_scancode, int a_action, int a_mods) {
+  if ((a_action != GLFW_PRESS) && (a_action != GLFW_REPEAT)) {
+    return;
+  }
+  if ((a_key == GLFW_KEY_ESCAPE) || (a_key == GLFW_KEY_Q)) {
+    glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
 }

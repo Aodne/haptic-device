@@ -97,7 +97,6 @@ STATUS_POLL_MS = 500
 # must match MIN/MAX_SIMULATION_TIME_STEP in globals.h
 MIN_TIME_STEP_S = 0.0001
 MAX_TIME_STEP_S = 0.005
-TIME_STEP_SLIDER_SCALE = 10000  # slider is integer ticks of 1e-4 s
 
 # must match the MIN_/MAX_ bounds for these in globals.h
 MIN_SETTLING_ERROR = 0.001
@@ -108,6 +107,10 @@ MIN_K_DAMPEN = 0.0
 MAX_K_DAMPEN = 50.0
 MIN_RETURN_DELAY_S = 0.0
 MAX_RETURN_DELAY_S = 30.0
+
+# must match MIN_/MAX_FORCE_SCALE in globals.h
+MIN_FORCE_SCALE = 0.0
+MAX_FORCE_SCALE = 1.0
 
 
 class MainWindow(QMainWindow):
@@ -228,6 +231,24 @@ class MainWindow(QMainWindow):
         self.pbc_combo.addItem("Force PBC off", "off")
         form.addRow("Periodic boundaries:", self.pbc_combo)
 
+        intensity_row = QHBoxLayout()
+        self.intensity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.intensity_slider.setRange(0, 100)
+        self.intensity_slider.setValue(100)
+        self.intensity_slider.setSingleStep(5)
+        self.intensity_slider.setToolTip(
+            "Scales all force feedback sent to the physical device. Lower this "
+            "if your haptic device is old or worn to reduce strain on it; a "
+            "hard safety cap is still applied on top of this at every setting."
+        )
+        self.intensity_value_label = QLabel("100%")
+        self.intensity_slider.valueChanged.connect(
+            lambda value: self.intensity_value_label.setText(f"{value}%")
+        )
+        intensity_row.addWidget(self.intensity_slider)
+        intensity_row.addWidget(self.intensity_value_label)
+        form.addRow("Feedback intensity:", intensity_row)
+
         self.time_step_spin = QDoubleSpinBox()
         self.time_step_spin.setDecimals(4)
         self.time_step_spin.setRange(MIN_TIME_STEP_S, MAX_TIME_STEP_S)
@@ -301,21 +322,6 @@ class MainWindow(QMainWindow):
         row2.addWidget(apply_potential)
         layout.addLayout(row2)
 
-        row_ts = QHBoxLayout()
-        row_ts.addWidget(QLabel("Time step:"))
-        self.time_step_slider = QSlider(Qt.Orientation.Horizontal)
-        self.time_step_slider.setRange(
-            int(MIN_TIME_STEP_S * TIME_STEP_SLIDER_SCALE),
-            int(MAX_TIME_STEP_S * TIME_STEP_SLIDER_SCALE),
-        )
-        self.time_step_slider.setValue(int(0.001 * TIME_STEP_SLIDER_SCALE))
-        self.time_step_value_label = QLabel("0.0010 s")
-        self.time_step_slider.valueChanged.connect(self._on_time_step_slider_changed)
-        self.time_step_slider.sliderReleased.connect(self._apply_live_time_step)
-        row_ts.addWidget(self.time_step_slider)
-        row_ts.addWidget(self.time_step_value_label)
-        layout.addLayout(row_ts)
-
         row3 = QHBoxLayout()
         anchor_all = QPushButton("Anchor all")
         anchor_all.clicked.connect(lambda: self.ipc.send("anchor_all"))
@@ -360,9 +366,20 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_haptic_tuning_group(self) -> QGroupBox:
-        group = QGroupBox("Haptic return tuning")
+        group = QGroupBox("Haptic feedback tuning")
         self.haptic_tuning_group = group
         form = QFormLayout(group)
+
+        self.force_scale_spin = QDoubleSpinBox()
+        self.force_scale_spin.setDecimals(2)
+        self.force_scale_spin.setRange(MIN_FORCE_SCALE, MAX_FORCE_SCALE)
+        self.force_scale_spin.setSingleStep(0.05)
+        self.force_scale_spin.setValue(1.0)
+        self.force_scale_spin.setToolTip(
+            "Scales all force feedback sent to the device. Turn down while "
+            "running if an old/worn device is feeling too strong."
+        )
+        form.addRow("Feedback intensity:", self.force_scale_spin)
 
         self.settling_err_spin = QDoubleSpinBox()
         self.settling_err_spin.setDecimals(4)
@@ -400,6 +417,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _apply_haptic_tuning(self):
+        self.ipc.send(f"set force_scale {self.force_scale_spin.value():.2f}")
         self.ipc.send(f"set settling_err {self.settling_err_spin.value():.4f}")
         self.ipc.send(f"set k_return {self.k_return_spin.value():.2f}")
         self.ipc.send(f"set k_dampen {self.k_dampen_spin.value():.2f}")
@@ -412,14 +430,6 @@ class MainWindow(QMainWindow):
 
     def _update_ase_enabled(self, potential: str):
         self.ase_spec_combo.setEnabled(potential == "ase")
-
-    def _on_time_step_slider_changed(self, ticks: int):
-        seconds = ticks / TIME_STEP_SLIDER_SCALE
-        self.time_step_value_label.setText(f"{seconds:.4f} s")
-
-    def _apply_live_time_step(self):
-        seconds = self.time_step_slider.value() / TIME_STEP_SLIDER_SCALE
-        self.ipc.send(f"set timestep {seconds:.4f}")
 
     def _browse_binary(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select haptic-device binary")
@@ -471,16 +481,17 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self.log_view.appendPlainText(f"$ {binary_path} {' '.join(args)}")
 
+        intensity = self.intensity_slider.value() / 100.0
+
         env = QProcessEnvironment.systemEnvironment()
         env.insert("HAPTIC_DEVICE_CMD_PORT", str(self.port_spin.value()))
         env.insert("HAPTIC_DEVICE_TIME_STEP", f"{self.time_step_spin.value():.4f}")
+        env.insert("HAPTIC_DEVICE_FORCE_SCALE", f"{intensity:.2f}")
         self.process.setProcessEnvironment(env)
 
-        initial_ticks = int(round(self.time_step_spin.value() * TIME_STEP_SLIDER_SCALE))
-        self.time_step_slider.blockSignals(True)
-        self.time_step_slider.setValue(initial_ticks)
-        self.time_step_slider.blockSignals(False)
-        self.time_step_value_label.setText(f"{self.time_step_spin.value():.4f} s")
+        self.force_scale_spin.blockSignals(True)
+        self.force_scale_spin.setValue(intensity)
+        self.force_scale_spin.blockSignals(False)
 
         self.process.setProgram(binary_path)
         self.process.setArguments(args)
@@ -581,20 +592,10 @@ class MainWindow(QMainWindow):
                 checkbox.setChecked(fields[key] == "true")
                 checkbox.blockSignals(False)
 
-        # don't fight the user while they're actively dragging the slider
-        if "timestep" in fields and not self.time_step_slider.isSliderDown():
-            try:
-                seconds = float(fields["timestep"])
-            except ValueError:
-                return
-            ticks = int(round(seconds * TIME_STEP_SLIDER_SCALE))
-            self.time_step_slider.blockSignals(True)
-            self.time_step_slider.setValue(ticks)
-            self.time_step_slider.blockSignals(False)
-            self.time_step_value_label.setText(f"{seconds:.4f} s")
 
         # don't fight the user while they're actively editing one of these
         for spin, key in (
+            (self.force_scale_spin, "force_scale"),
             (self.settling_err_spin, "settling_err"),
             (self.k_return_spin, "k_return"),
             (self.k_dampen_spin, "k_dampen"),

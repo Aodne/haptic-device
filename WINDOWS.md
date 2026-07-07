@@ -1,3 +1,7 @@
+**Outdated.** This describes an abandoned manual Visual Studio project-file
+setup. For the current, working native Windows build (via CMake), see the
+"Windows" section of [README.md](README.md#windows).
+
 Installing all the Drivers/SDKs/Software:
 
 
