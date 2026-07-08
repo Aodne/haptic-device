@@ -16,7 +16,7 @@ import time
 
 USERNAME = "wc5879"
 REMOTE_PYTHON = f"/home/{USERNAME}/uma_env/bin/python3"
-NUM_SHARDS = 2
+NUM_SHARDS = 1
 
 class Atoms:
     def __init__(self, **kwargs):
