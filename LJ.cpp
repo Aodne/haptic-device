@@ -1789,36 +1789,6 @@ void applyBoundaryConditions(cVector3d &x_curr) {
       BOUNDARY_LIMIT);
 }
 
-cColorf getTemperatureColor(double temperature) {
-  cColorf color;
-  
-  // Clamp temperature for gradient range
-  double tempClamped = temperature;
-  if (tempClamped < -5.0) tempClamped = -5.0;
-  if (tempClamped > 5.0) tempClamped = 5.0;
-  
-  // Map -5 to 5 range into 0 to 1 gradient factor
-  double gradientFactor = (tempClamped + 5.0) / 10.0;  // 0 at -5°K, 0.5 at 0°K, 1 at 5°K
-  
-  // Vibrant green at -5/0: (0.1, 0.9, 0.1)
-  // Vibrant purple at 5: (0.85, 0.1, 0.85)
-  double greenR = 0.1;
-  double greenG = 0.9;
-  double greenB = 0.1;
-  
-  double purpleR = 0.85;
-  double purpleG = 0.1;
-  double purpleB = 0.85;
-  
-  // Smooth linear interpolation from green through cyan to purple
-  double r = greenR + (purpleR - greenR) * gradientFactor;
-  double g = greenG + (purpleG - greenG) * gradientFactor;
-  double b = greenB + (purpleB - greenB) * gradientFactor;
-  
-  color.set(r, g, b);
-  return color;
-}
-
 cVector3d getNewAtomPosition(Atom *atom, cVector3d &prev_position, const double timeInterval) {
   cVector3d x_curr = atom->getLocalPos();
   cVector3d force = atom->getForce();
@@ -2077,9 +2047,6 @@ cVector3d stepSimulation(const cVector3d &requestedPosition, const double timeIn
 
     for (int i = 0; i < spheres.size(); i++) {
       Atom *atom = spheres[i];
-      if (!atom->isCurrent() && !atom->isAnchor()) {
-       atom->setColor(getTemperatureColor(currentTemp));
-      }
       cVector3d force(forcesVec[i][0], forcesVec[i][1], forcesVec[i][2]);
       if (!isFiniteVector(force)) {
         force.zero();
